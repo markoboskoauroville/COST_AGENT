@@ -13,7 +13,7 @@
 import AppKit
 import SwiftUI
 
-let VERSION = 1
+let VERSION = 2
 
 // ---------------------------------------------------------------- the gate
 func gatePort() -> Int {
@@ -21,7 +21,7 @@ func gatePort() -> Int {
     if let d = FileManager.default.contents(atPath: p),
        let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
        let e = j["costagent"] as? [String: Any], let n = e["port"] as? Int { return n }
-    return 8870
+    return 9047
 }
 func gateURL(_ path: String) -> URL { URL(string: "http://127.0.0.1:\(gatePort())\(path)")! }
 

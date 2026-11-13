@@ -5,7 +5,7 @@ Marko, 13.11.2026: "Please build a guard to ask me, are you sure you want to rec
 What it is: every paid call (Groq vision and chat in Queen, Speechify above an allowance, paid images, any API key) asks the gate first. The gate shows Marko a box, "Are you sure? This will cost about $X (N image recognitions with Groq). YES / NO", and a NO (or no answer) means nothing is spent.
 
 Parts:
-- `gate/costagent.py`: the gate (python3 standard library). `costagent.py serve`; CLI `ask`, `spent`, `status`. Port from ~/.config/mantra-ports.json ("costagent", 8870). Local callers need nothing; the VM calls it over Tailscale with X-Cost-Token.
+- `gate/costagent.py`: the gate (python3 standard library). `costagent.py serve`; CLI `ask`, `spent`, `status`. Port from ~/.config/mantra-ports.json ("costagent", 9047). Local callers need nothing; the VM calls it over Tailscale with X-Cost-Token.
 - `app/main.swift`: Cost Agent (Mantra).app. With `--ask "<text>"` it is the box (floats on top at the mouse, prints YES or NO, NO on Escape and on the timeout); without it, the dashboard (today / week / month per provider and per process, waiting questions, history of answers).
 - Marko away: when ~/.voice/route says `phone <adb target>` the question is also spoken on the Pixel (phonesay) and a YES / NO page is opened on it (Tailscale address of the Mac, token in the URL).
 

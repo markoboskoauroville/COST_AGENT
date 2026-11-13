@@ -42,7 +42,7 @@ DECISIONS = os.path.join(DATA, "decisions.jsonl")
 TOKEN_FILE = os.path.join(DATA, "token")
 CONFIG = os.path.join(DATA, "config.json")
 PORTS = os.path.join(HOME, ".config", "mantra-ports.json")
-NAME, WANTED = "costagent", 8870
+NAME, WANTED = "costagent", 9047
 APP_BIN = "/Applications/Cost Agent (Mantra).app/Contents/MacOS/CostAgent"
 VOICE_ROUTE = os.path.join(HOME, ".voice", "route")
 
@@ -427,6 +427,13 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def handle_one_request(self):
+        ip = self.client_address[0]
+        if not (ip in ("127.0.0.1", "::1") or ip.startswith("100.") and 64 <= int(ip.split(".")[1]) <= 127):
+            self.close_connection = True          # only this Mac and Tailscale peers (the VM, the Pixel); never the LAN
+            return
+        super().handle_one_request()
+
     def _local(self):
         return self.client_address[0] in ("127.0.0.1", "::1")
 
@@ -504,8 +511,12 @@ def serve():
     except Exception:
         pass
     token()
-    srv = ThreadingHTTPServer(("0.0.0.0", p), H)
-    print(f"costagent on :{p}", flush=True)
+    srv = ThreadingHTTPServer(("127.0.0.1", p), H)
+    ts = tailscale_ip()
+    if ts:                                        # the second listener: the Mac's Tailscale address only, never 0.0.0.0
+        srv2 = ThreadingHTTPServer((ts, p), H)
+        threading.Thread(target=srv2.serve_forever, daemon=True).start()
+    print(f"costagent on 127.0.0.1:{p} and {ts or 'no tailscale'}", flush=True)
     srv.serve_forever()
 
 
