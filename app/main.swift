@@ -13,7 +13,7 @@
 import AppKit
 import SwiftUI
 
-let VERSION = 2
+let VERSION = 3
 
 // ---------------------------------------------------------------- the gate
 func gatePort() -> Int {
@@ -121,6 +121,9 @@ struct Summary: Decodable {
     var pending: [Pend]
     var history: [Hist]
     var allowances: [String: Allow]
+    var ask_above_usd: Double?
+    var small_total_today: Double?
+    var small_passes: [Hist]?
 }
 
 final class Model: ObservableObject {
@@ -194,6 +197,7 @@ struct Dashboard: View {
                 if let s = m.s {
                     HStack(spacing: 10) { Big(label: "TODAY", v: s.totals.today); Big(label: "THIS WEEK", v: s.totals.week); Big(label: "THIS MONTH", v: s.totals.month) }
                     if !s.pending.isEmpty { pending(s) }
+                    threshold(s)
                     Table(title: "PER PROVIDER", rows: s.by_provider)
                     Table(title: "PER PROCESS", rows: s.by_process)
                     Table(title: "WHERE IT RAN", rows: s.by_where)
@@ -218,6 +222,18 @@ struct Dashboard: View {
                 }
             }
         }.padding(14).overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.red, lineWidth: 1))
+    }
+    func threshold(_ s: Summary) -> some View {
+        VStack(spacing: 6) {
+            Text("THE LINE").font(mono(11, .semibold)).tracking(2).foregroundColor(.dimSand)
+            Text("Below \(usd(s.ask_above_usd ?? 0.10)) it passes and is recorded; from \(usd(s.ask_above_usd ?? 0.10)) up it asks \"Do you approve?\"")
+                .font(mono(13)).foregroundColor(.amber).multilineTextAlignment(.center)
+            Text("passed without a question today: \(usd(s.small_total_today ?? 0)) in \((s.small_passes ?? []).count) recent calls")
+                .font(mono(11, .regular)).foregroundColor(.dimSand)
+            ForEach(Array((s.small_passes ?? []).prefix(5)), id: \.uid) { h in
+                Text("\(usd(h.estimate_usd ?? 0))  \(h.who ?? ""): \(h.what ?? "")").font(mono(11, .regular)).foregroundColor(.sand).lineLimit(1)
+            }
+        }
     }
     func allowances(_ s: Summary) -> some View {
         VStack(spacing: 6) {

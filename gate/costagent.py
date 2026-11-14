@@ -16,9 +16,12 @@ HTTP (JSON). Local callers need nothing; callers from another machine (the VM ov
 
 The rules (modules/cost-agent.md):
   * NO is the answer to silence: nothing is spent without a YES, a timeout is a NO.
+  * Threshold (Marko, 14.11.2026): an action estimated below ask_above_usd ($0.10, config.json) passes without a box
+    but is recorded (decisions.jsonl "pass", dashboard); at or above it the box asks "Do you approve? ...".
+    Small calls of the same who+job add up over 10 minutes; past the threshold the sum asks (no slicing).
   * One question per job. A YES is a grant for that job's estimate; calls inside the grant pass silently; a job that
     would pass its estimate by more than 20 % asks again. A call with no declared size is a grant of one chunk
-    ($0.25 by default) and asks again for the next chunk.
+    ($0.10 by default) and asks again for the next chunk.
   * A NO is remembered for 10 minutes for that job: the callers fail fast, Marko is not asked 400 times.
   * Free providers pass without a box. Speechify passes inside a daily allowance Marko can see (config.json).
 Data (ledgers, answers, token) lives in ~/.mantra-os/cost-agent, never in the repository.
@@ -47,7 +50,9 @@ APP_BIN = "/Applications/Cost Agent (Mantra).app/Contents/MacOS/CostAgent"
 VOICE_ROUTE = os.path.join(HOME, ".voice", "route")
 
 DEFAULTS = {
-    "chunk_usd": 0.25,            # a call with no declared size is granted this much, then asks again
+    "ask_above_usd": 0.10,        # Marko 14.11.2026: from this estimate up the box asks; below it passes (but is recorded)
+    "slice_window_s": 600,        # small calls of one who+job add up over this long; past the threshold they ask
+    "chunk_usd": 0.10,            # a call with no declared size is granted this much, then asks again
     "overrun": 1.2,               # a job may pass its estimate by 20 % before it asks again
     "timeout_s": 120,             # no answer in this time = NO
     "deny_memory_s": 600,         # a NO is remembered this long for its job
@@ -60,6 +65,7 @@ LOCK = threading.RLock()
 PENDING = {}      # id -> dict(question, event, answer)
 GRANTS = {}       # job -> dict(approved, spent, at)
 DENIED = {}       # job -> time of the NO
+SMALL = {}        # who|job -> [(time, usd)] of small calls that passed without a box (the anti-slicing counter)
 
 
 def cfg():
@@ -140,11 +146,12 @@ def today_spent(provider):
 
 
 def ask_text(q):
-    n = f" ({q['items']} {q.get('unit') or 'items'})" if q.get("items") else ""
+    prov = str(q["provider"]).capitalize()
+    n = f"{q['items']} {q.get('unit') or 'items'} with {prov}" if q.get("items") else f"with {prov}"
     extra = ""
     if q.get("reason_ask"):
         extra = " " + q["reason_ask"]
-    return (f"Are you sure? This will cost about {money(q['estimate_usd'])}{n} with {q['provider']}. "
+    return (f"Do you approve? This will cost about {money(q['estimate_usd'])} ({n}). "
             f"{q['who']}: {q['what']}.{extra}")
 
 
@@ -267,16 +274,35 @@ def ask(d):
         g = GRANTS.get(job)
         if g and time.time() - g["at"] < c["grant_hours"] * 3600 and g["spent"] + est <= g["approved"] * c["overrun"]:
             return log("yes", f"inside the grant of {money(g['approved'])} ({money(g['spent'])} spent)")
+        small_sum = 0.0
+        thr = float(c["ask_above_usd"])
+        if 0 < est < thr:
+            key = f"{who}|{job}"
+            win = [(t, u) for t, u in SMALL.get(key, []) if time.time() - t < c["slice_window_s"]]
+            small_sum = sum(u for _, u in win)
+            if small_sum + est < thr:
+                win.append((time.time(), est))
+                SMALL[key] = win
+                jappend(DECISIONS, {"event": "pass", "who": who, "what": what, "provider": provider,
+                                    "estimate_usd": est, "items": items, "job": job,
+                                    "window_usd": round(small_sum + est, 6)})
+                return {"answer": "yes", "reason": f"below {money(thr)} ({money(small_sum + est)} in the last "
+                        f"{int(c['slice_window_s'] // 60)} min), recorded", "id": None, "job": job}
         # one open question per job: a second caller of the same job waits for the same answer
         same = next((i for i, p in PENDING.items() if p["q"]["job"] == job and not p.get("answer")), None)
         if same:
             qid, fresh = same, False
         else:
             qid = f"q{int(time.time()*1000)}"
-            if est <= 0 or not d.get("job"):
+            if est <= 0:
                 q["estimate_usd"] = est = max(est, c["chunk_usd"])
                 q["reason_ask"] = "(size not declared: one chunk, then it asks again)"
                 q["items"] = None
+            elif small_sum > 0:
+                q["estimate_usd"] = est = est + small_sum
+                q["reason_ask"] = (f"(many small calls added up to {money(est)} in the last "
+                                   f"{int(c['slice_window_s'] // 60)} minutes)")
+                SMALL.pop(f"{who}|{job}", None)
             elif g:
                 q["reason_ask"] = f"(this job passed its estimate: {money(g['spent'])} spent of {money(g['approved'])})"
             PENDING[qid] = {"q": q, "event": threading.Event(), "at": time.time()}
@@ -399,6 +425,11 @@ def summary(with_vm=True):
                             "queen_vm_total": vm}
     c = cfg()
     out["allowances"] = {p: {"daily_usd": a, "today_usd": round(today_spent(p), 4)} for p, a in c["daily_allowance_usd"].items()}
+    out["ask_above_usd"] = c["ask_above_usd"]
+    out["slice_window_s"] = c["slice_window_s"]
+    out["small_passes"] = [r for r in jread(DECISIONS) if r.get("event") == "pass"][-30:][::-1]
+    out["small_total_today"] = round(sum(r.get("estimate_usd", 0) for r in jread(DECISIONS)
+                                         if r.get("event") == "pass" and r.get("ts", "")[:10] == today), 4)
     out["pending"] = [{"id": i, "ask": ask_text(p["q"]), "who": p["q"]["who"], "provider": p["q"]["provider"],
                        "estimate_usd": p["q"]["estimate_usd"], "age_s": int(time.time() - p["at"])}
                       for i, p in PENDING.items() if not p.get("answer")]
